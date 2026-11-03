@@ -54,7 +54,7 @@ jobs:
               json.dump(payload, payload_file, ensure_ascii=False)
           PY
 
-      - name: Update test workflow only
+      - name: Verify target is inactive and update test workflow
         shell: bash
         env:
           N8N_BASE_URL: ${{ vars.N8N_BASE_URL }}
@@ -71,6 +71,37 @@ jobs:
           fi
 
           base_url="${N8N_BASE_URL%/}"
+          target_response="${RUNNER_TEMP}/n8n-test-target.json"
+          if ! status=$(curl --silent --show-error \
+            --output "$target_response" \
+            --write-out '%{http_code}' \
+            --header "X-N8N-API-KEY: ${N8N_API_KEY}" \
+            "${base_url}/api/v1/workflows/9hLboYiaMlm9GKf6"); then
+            echo "::error::Could not check the n8n test workflow status."
+            exit 1
+          fi
+          if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
+            echo "::error::n8n status check returned HTTP ${status}."
+            exit 1
+          fi
+          python3 - "$target_response" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          response = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          workflow = response.get("data", response)
+          if not isinstance(workflow, dict):
+              raise SystemExit("Could not determine test workflow status; refusing deploy")
+
+          active = workflow.get("active")
+          active_version_id = workflow.get("activeVersionId")
+          if active is True or active_version_id:
+              raise SystemExit("Test workflow is active/published; refusing deploy")
+          if active is not False and "activeVersionId" not in workflow:
+              raise SystemExit("Test workflow status is unknown; refusing deploy")
+          PY
+
           if ! status=$(curl --silent --show-error \
             --output /dev/null \
             --write-out '%{http_code}' \
@@ -78,7 +109,7 @@ jobs:
             --header "X-N8N-API-KEY: ${N8N_API_KEY}" \
             --header 'Content-Type: application/json' \
             --data-binary "@${RUNNER_TEMP}/n8n-workflow-payload.json" \
-            "${base_url}/api/v1/workflows/9hLboYiaMlm9GKf6?publishIfActive=false"); then
+            "${base_url}/api/v1/workflows/9hLboYiaMlm9GKf6"); then
             echo "::error::Could not complete the n8n API request."
             exit 1
           fi
