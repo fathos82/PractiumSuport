@@ -1,0 +1,90 @@
+name: Deploy n8n search workflow to test
+
+on:
+  push:
+    branches:
+      - 'feature/**'
+    paths:
+      - 'HibridySearchSuportAgent.json'
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-test-workflow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate workflow JSON and prepare API payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          source = Path("HibridySearchSuportAgent.json")
+          with source.open(encoding="utf-8") as workflow_file:
+              workflow = json.load(workflow_file)
+
+          if not isinstance(workflow, dict):
+              raise SystemExit("Workflow JSON must contain an object")
+          if not isinstance(workflow.get("name"), str):
+              raise SystemExit("Workflow JSON must contain a string name")
+          if not isinstance(workflow.get("nodes"), list):
+              raise SystemExit("Workflow JSON must contain a nodes array")
+          if not isinstance(workflow.get("connections"), dict):
+              raise SystemExit("Workflow JSON must contain a connections object")
+          if not isinstance(workflow.get("settings", {}), dict):
+              raise SystemExit("Workflow settings must be an object")
+
+          # The API path is the sole workflow identifier. Do not forward the
+          # exported workflow id, active flag, or other deployment metadata.
+          payload = {
+              key: workflow[key]
+              for key in ("name", "nodes", "connections", "settings", "staticData")
+              if key in workflow
+          }
+          payload_path = Path(os.environ["RUNNER_TEMP"]) / "n8n-workflow-payload.json"
+          with payload_path.open("w", encoding="utf-8") as payload_file:
+              json.dump(payload, payload_file, ensure_ascii=False)
+          PY
+
+      - name: Update test workflow only
+        shell: bash
+        env:
+          N8N_BASE_URL: ${{ vars.N8N_BASE_URL }}
+          N8N_API_KEY: ${{ secrets.N8N_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${N8N_BASE_URL:-}" ]]; then
+            echo "::error::Configure the N8N_BASE_URL GitHub Actions variable."
+            exit 1
+          fi
+          if [[ -z "${N8N_API_KEY:-}" ]]; then
+            echo "::error::Configure the N8N_API_KEY GitHub Actions secret."
+            exit 1
+          fi
+
+          base_url="${N8N_BASE_URL%/}"
+          if ! status=$(curl --silent --show-error \
+            --output /dev/null \
+            --write-out '%{http_code}' \
+            --request PUT \
+            --header "X-N8N-API-KEY: ${N8N_API_KEY}" \
+            --header 'Content-Type: application/json' \
+            --data-binary "@${RUNNER_TEMP}/n8n-workflow-payload.json" \
+            "${base_url}/api/v1/workflows/9hLboYiaMlm9GKf6"); then
+            echo "::error::Could not complete the n8n API request."
+            exit 1
+          fi
+
+          if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
+            echo "::error::n8n API returned HTTP ${status}."
+            exit 1
+          fi
+          echo "Test workflow updated successfully (HTTP ${status})."
