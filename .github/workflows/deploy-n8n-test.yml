@@ -78,7 +78,7 @@ jobs:
             --header "X-N8N-API-KEY: ${N8N_API_KEY}" \
             --header 'Content-Type: application/json' \
             --data-binary "@${RUNNER_TEMP}/n8n-workflow-payload.json" \
-            "${base_url}/api/v1/workflows/9hLboYiaMlm9GKf6"); then
+            "${base_url}/api/v1/workflows/9hLboYiaMlm9GKf6?publishIfActive=false"); then
             echo "::error::Could not complete the n8n API request."
             exit 1
           fi
